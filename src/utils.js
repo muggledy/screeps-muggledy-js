@@ -130,17 +130,14 @@ class Harvester {
     }
 
     is_alive() {
-        return (Game.creeps.hasOwnProperty(this.name) && (this.id === Game.creeps[this.name].id));
+        return (Game.creeps.hasOwnProperty(this.name) && ((this.id === undefined) || (this.id === Game.creeps[this.name].id)));
     }
 
     self() {
         if (this.is_alive()) {
-            return Game.creeps[this.name];
-        }
-        return null;
-    }
-    creep() {
-        if (this.is_alive()) {
+            if (this.id === undefined) {
+                Harvester.modifyDataProperty(this.name, 'id', Game.creeps[this.name].id);
+            }
             return Game.creeps[this.name];
         }
         return null;
@@ -181,6 +178,25 @@ class Harvester {
             if ((type === null) || (obj.type === type)) {
                 console.log(`harvester-${i}: name:${name}, type:${obj.type}, id:${obj.id}, is_alive:${harvester.is_alive()}`);
                 i += 1;
+            }
+        }
+    }
+
+    static generate_harvesters() { //生成采集者的标准策略
+        let creep_energy_type_num = 0;
+        Harvester.get_alive_harvesters(HARVESTER_ENERGY_TYPE).forEach(harvester => {
+            creep_energy_type_num += 1;
+        })
+        const spawns = Game.spawns['Spawn1'].room.find(FIND_MY_SPAWNS);
+        if (spawns.length <= 0) {
+            return;
+        }
+        const spawn = getRandomItemFromObject(spawns);
+        let name = null;
+        if (creep_energy_type_num < 3) { //如果存活的能量采集者数量<3，则需要创建，否则不创建
+            name = `harvester_${Game.time}`;
+            if (spawn.spawnCreep([WORK, CARRY, MOVE], name, {'memory': {'role': 'harvester'}}) == OK) {
+                new Harvester(Game.creeps[name], HARVESTER_ENERGY_TYPE);
             }
         }
     }
