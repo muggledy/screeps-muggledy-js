@@ -3,4 +3,10 @@
     > npm install -g grunt-cli
     > npm install grunt grunt-screeps
     ```
-2. ...
+2. Game strategy:
+    ```txt
+    1. firstly generate creeps one by one to harvest energy until the creeps quantity reaches 3(when the original spawn energy is full, 
+       the 3 creeps will goto build spawn extensions)
+    2. after step 1 is completed, continue to generate 3 creeps to collect energy to upgrade the room controller
+    3. ...
+    ```
