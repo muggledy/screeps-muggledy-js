@@ -196,10 +196,9 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
 }
 
 // 围绕 Spawn 生成带门的城墙建筑工地
-function createWallConstructionSitesAroundSpawn(spawn, doorSide) { // doorSide可以修改为 'top', 'bottom', 'left', 'right' 来改变门的位置
+function createWallConstructionSitesAroundSpawn(spawn, doorSide, sideLength) { // doorSide可以修改为 'top', 'bottom', 'left', 'right' 来改变门的位置
     const room = spawn.room;
     const spawnPos = spawn.pos;
-    const sideLength = 8;
     const doorWidth = 3;
 
     // 遍历方形区域的坐标
@@ -274,20 +273,49 @@ function getSourceDirectionRelativeToWall(spawn, source) { //判断金矿在spaw
     }
 }
 
+function getReverseDirection(direction) {
+    if (direction == 'top') {
+        return 'bottom';
+    } else if (direction == 'bottom') {
+        return 'top';
+    } else if (direction == 'left') {
+        return 'right';
+    } else if (direction == 'right') {
+        return 'left';
+    } else {
+        return 'top';
+    }
+}
+
 function build_defense_wall_for_spawn(creep) {
     const spawn = Game.spawns['Spawn1'];
+    let sources = undefined;
+    let direction = undefined;
     //1.在Swpan1周围创建扩展建筑工地
     if ((spawn.memory.wall0_flag === undefined) || (spawn.memory.wall0_flag < 1)) {
-        const sources = creep.room.find(FIND_SOURCES_ACTIVE);
-        let direction = 'right';
+        sources = creep.room.find(FIND_SOURCES_ACTIVE);
+        direction = 'right';
         if (sources.length > 0) {
             direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
             if (direction == 'inside') {
                 direction = getRandomItemFromObject(['top','bottom','left','right']);
             }
         }
-        createWallConstructionSitesAroundSpawn(spawn, direction); //金矿在spawn的哪个方位，就在哪个方位开城门
+        createWallConstructionSitesAroundSpawn(spawn, direction, 8); //金矿在spawn的哪个方位，就在哪个方位开城门
         spawn.memory.wall0_flag = 1; //表示spawn的城墙0已创建好工地
+    }
+    if ((spawn.memory.wall1_flag === undefined) || (spawn.memory.wall1_flag < 1)) {
+        sources = creep.room.find(FIND_SOURCES_ACTIVE);
+        direction = 'right';
+        if (sources.length > 0) {
+            direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
+            if (direction == 'inside') {
+                direction = getRandomItemFromObject(['top','bottom','left','right']);
+            }
+            //direction = getReverseDirection(direction);
+        }
+        createWallConstructionSitesAroundSpawn(spawn, direction, 14); //金矿在spawn的哪个方位，就在哪个方位开城门
+        spawn.memory.wall1_flag = 1; //表示spawn的城墙0已创建好工地
     }
     //if (spawn.memory.wall0_flag < 2) {
         //2.找到(过滤出)已存在的且!(structure属性存在且建筑的 hits 是否等于 hitsMax)（表示扩展建筑尚未build建造完成）的城墙建筑工地，继续建造
@@ -634,7 +662,7 @@ class Harvester {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
             }
         }
-        if (harvester_construct_defensive_building_type_num < 3) { //创建修筑(及维修)防御工事工人
+        if (harvester_construct_defensive_building_type_num < 5) { //创建修筑(及维修)防御工事工人
             name = `harvester_t${roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}_${Game.time}`;
             if (spawn.spawnCreep([WORK, CARRY, MOVE], name, {'memory': {'role': roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}}) == OK) {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING);
