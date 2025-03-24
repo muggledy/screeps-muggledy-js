@@ -40,12 +40,15 @@ const roleTypes = {};
 roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN = 1;
 roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER = 2;
 roleTypes.DESTINY_CHILD = 3;
+roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING = 4;
 
 const roleStates = {};
 roleStates.HARVESTER_HARVESTING = 0x00000001;
 roleStates.HARVESTER_BUILDING_SPAWN = 0x00000002;
 roleStates.HARVESTER_SUPPLYING_SPAWN = 0x00000004;
 roleStates.HARVESTER_SUPPLYING_CONTROL = 0x00000008;
+roleStates.HARVESTER_BUILDING_WALL = 0x00000010;
+roleStates.HARVESTER_REPAIRING_WALL = 0x00000020;
 
 // 设置标志
 function SET_FLAG(obj, property, flag) {
@@ -88,6 +91,12 @@ function print_role_state(state) {
     }
     if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_SUPPLYING_CONTROL)) {
         states_str.push('SC');
+    }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_BUILDING_WALL)) {
+        states_str.push('BW');
+    }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_REPAIRING_WALL)) {
+        states_str.push('RW');
     }
     return states_str.join('.');
 }
@@ -179,6 +188,144 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
         return;
     }
     //4.如果当前spawn以及spawn扩展全部填满了能量，即以上步骤2、3逻辑都未走进去，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
+    SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
+    console.log(`${creep.name} supply energy to room control temporarily`);
+    if(creep.upgradeController(creep.room.controller) == ERR_NOT_IN_RANGE) {
+        creep.moveTo(creep.room.controller, {visualizePathStyle: {stroke: '#ffffff'}});
+    }
+}
+
+// 围绕 Spawn 生成带门的城墙建筑工地
+function createWallConstructionSitesAroundSpawn(spawn, doorSide) { // doorSide可以修改为 'top', 'bottom', 'left', 'right' 来改变门的位置
+    const room = spawn.room;
+    const spawnPos = spawn.pos;
+    const sideLength = 8;
+    const doorWidth = 3;
+
+    // 遍历方形区域的坐标
+    for (let x = spawnPos.x - sideLength / 2; x <= spawnPos.x + sideLength / 2; x++) {
+        for (let y = spawnPos.y - sideLength / 2; y <= spawnPos.y + sideLength / 2; y++) {
+            // 只处理方形的边缘
+            if (x === spawnPos.x - sideLength / 2 || x === spawnPos.x + sideLength / 2 ||
+                y === spawnPos.y - sideLength / 2 || y === spawnPos.y + sideLength / 2) {
+                // 检查坐标是否在房间范围内
+                if (x >= 0 && x < 50 && y >= 0 && y < 50) {
+                    // 处理门的逻辑
+                    let isDoorArea = false;
+                    if (doorSide === 'bottom' && y === spawnPos.y + sideLength / 2) {
+                        isDoorArea = x >= spawnPos.x - doorWidth / 2 && x <= spawnPos.x + doorWidth / 2;
+                    } else if (doorSide === 'top' && y === spawnPos.y - sideLength / 2) {
+                        isDoorArea = x >= spawnPos.x - doorWidth / 2 && x <= spawnPos.x + doorWidth / 2;
+                    } else if (doorSide === 'left' && x === spawnPos.x - sideLength / 2) {
+                        isDoorArea = y >= spawnPos.y - doorWidth / 2 && y <= spawnPos.y + doorWidth / 2;
+                    } else if (doorSide === 'right' && x === spawnPos.x + sideLength / 2) {
+                        isDoorArea = y >= spawnPos.y - doorWidth / 2 && y <= spawnPos.y + doorWidth / 2;
+                    }
+
+                    if (!isDoorArea) {
+                        const newPos = new RoomPosition(x, y, room.name);
+                        // 检查该位置是否可通行且没有其他建筑和建筑工地
+                        const lookResults = newPos.look();
+                        let isBuildable = true;
+                        for (const result of lookResults) {
+                            if (result.type === LOOK_TERRAIN && result.terrain === 'wall') {
+                                isBuildable = false;
+                                break;
+                            }
+                            if (result.type === LOOK_STRUCTURES) {
+                                isBuildable = false;
+                                break;
+                            }
+                            if (result.type === LOOK_CONSTRUCTION_SITES) {
+                                isBuildable = false;
+                                break;
+                            }
+                        }
+                        if (isBuildable) {
+                            room.createConstructionSite(newPos, STRUCTURE_WALL);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+function getSourceDirectionRelativeToWall(spawn, source) { //判断金矿在spawn的哪个方位
+    const spawnPos = spawn.pos;
+    const sourcePos = source.pos;
+
+    // 计算城墙区域的边界
+    const leftBoundary = spawnPos.x - 5;
+    const rightBoundary = spawnPos.x + 5;
+    const topBoundary = spawnPos.y - 5;
+    const bottomBoundary = spawnPos.y + 5;
+
+    if (sourcePos.y < topBoundary) {
+        return 'top';
+    } else if (sourcePos.y > bottomBoundary) {
+        return 'bottom';
+    } else if (sourcePos.x < leftBoundary) {
+        return 'left';
+    } else if (sourcePos.x > rightBoundary) {
+        return 'right';
+    } else {
+        return 'inside'; // 金矿在城墙区域内部
+    }
+}
+
+function build_defense_wall_for_spawn(creep) {
+    const spawn = Game.spawns['Spawn1'];
+    //1.在Swpan1周围创建扩展建筑工地
+    if ((spawn.memory.wall0_flag === undefined) || (spawn.memory.wall0_flag < 1)) {
+        const sources = creep.room.find(FIND_SOURCES_ACTIVE);
+        let direction = 'right';
+        if (sources.length > 0) {
+            direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
+            if (direction == 'inside') {
+                direction = getRandomItemFromObject(['top','bottom','left','right']);
+            }
+        }
+        createWallConstructionSitesAroundSpawn(spawn, direction); //金矿在spawn的哪个方位，就在哪个方位开城门
+        spawn.memory.wall0_flag = 1; //表示spawn的城墙0已创建好工地
+    }
+    //if (spawn.memory.wall0_flag < 2) {
+        //2.找到(过滤出)已存在的且!(structure属性存在且建筑的 hits 是否等于 hitsMax)（表示扩展建筑尚未build建造完成）的城墙建筑工地，继续建造
+        const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES).filter((site) => {
+            const structure = site.structure;
+            if (site.structureType === STRUCTURE_WALL) {
+                if (!(structure && (structure.hits === structure.hitsMax))) {
+                    return true;
+                }
+            }
+            return false;
+        });
+        if (constructionSites.length > 0) {
+            SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_WALL);
+            console.log(`${creep.name} build wall ${constructionSites[0].pos}`);
+            if (creep.build(constructionSites[0]) === ERR_NOT_IN_RANGE) {
+                creep.moveTo(constructionSites[0], { visualizePathStyle: { stroke: '#ffffff' } });
+            }
+            return;
+        }
+    //}
+    //spawn.memory.wall0_flag = 2; //表示spawn的城墙0已建造完毕
+    //3.修理城墙，提升耐久值
+    // 查找需要修理的城墙
+    let walls = creep.room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_WALL && structure.hits < structure.hitsMax
+    });
+    walls = sorted(walls, (obj) => (-obj.hits)); //以期找到耐久值最低的城墙优先进行repair
+    // 执行修理
+    if (walls.length > 0) {
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
+        console.log(`${creep.name} repair wall ${walls[0].pos}`);
+        if (creep.repair(walls[0]) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(walls[0], { visualizePathStyle: { stroke: '#ffffff' } });
+        }
+        return;
+    }
+    //4.如果城墙建造完毕也没有要维修的城墙，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(creep.room.controller) == ERR_NOT_IN_RANGE) {
@@ -284,6 +431,8 @@ class Harvester {
             this.run_for_harvester_energy_supply_spawn_type();
         } else if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER == this.type) {
             this.run_for_harvester_energy_supply_controller_type();
+        } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == this.type) {
+            this.run_for_harvester_construct_defensive_building_type();
         }
     }
 
@@ -368,6 +517,32 @@ class Harvester {
         }
     }
 
+    run_for_harvester_construct_defensive_building_type() {
+        const creep = this.self(); //i.e., this.creep()
+        if (!creep) {
+            return;
+        }
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_WALL);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
+        if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
+            SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
+        }
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store.getFreeCapacity() <= 0)) {
+            CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
+        }
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING)) {
+            const sources = creep.room.find(FIND_SOURCES_ACTIVE);
+            if (sources.length > 0) {
+                if(creep.harvest(sources[0]) == ERR_NOT_IN_RANGE) {
+                    creep.moveTo(sources[0], {visualizePathStyle: {stroke: '#ffaa00'}});
+                }
+            }
+        } else {
+            build_defense_wall_for_spawn(creep);
+        }
+    }
+
     is_alive() {
         const ret = (Game.creeps.hasOwnProperty(this.name) && ((this.id === undefined) || (this.id === Game.creeps[this.name].id)));
         if (ret && (this.id === undefined)) {
@@ -430,11 +605,14 @@ class Harvester {
     static generate_harvesters() { //生成各种类型采集者的策略模板
         let harvester_energy_supply_spawn_type_num = 0;
         let harvester_energy_supply_controller_type_num = 0;
+        let harvester_construct_defensive_building_type_num = 0;
         Harvester.get_alive_harvesters().forEach(harvester => {
             if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN == harvester.type) {
                 harvester_energy_supply_spawn_type_num += 1;
             } else if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER == harvester.type) {
                 harvester_energy_supply_controller_type_num += 1;
+            } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == harvester.type) {
+                harvester_construct_defensive_building_type_num += 1;
             }
         })
         const spawns = Game.spawns['Spawn1'].room.find(FIND_MY_SPAWNS);
@@ -448,12 +626,18 @@ class Harvester {
             if (spawn.spawnCreep([WORK, CARRY, MOVE], name, {'memory': {'role': roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN}}) == OK) {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN); //注意母巢刚创建creep时，这里creep.id还是undefined的
             }
-            return;
+            return; //spawn存储的能量优先用于造出指定数量的能量采集者
         }
         if (harvester_energy_supply_controller_type_num < 3) {
             name = `harvester_t${roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER}_${Game.time}`;
             if (spawn.spawnCreep([WORK, CARRY, MOVE], name, {'memory': {'role': roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER}}) == OK) {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
+            }
+        }
+        if (harvester_construct_defensive_building_type_num < 3) { //创建修筑(及维修)防御工事工人
+            name = `harvester_t${roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}_${Game.time}`;
+            if (spawn.spawnCreep([WORK, CARRY, MOVE], name, {'memory': {'role': roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}}) == OK) {
+                new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING);
             }
         }
     }
@@ -466,6 +650,8 @@ class Harvester {
                     new Harvester(creep, roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN);
                 } else if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER == creep.memory.role) {
                     new Harvester(creep, roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
+                } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == creep.memory.role) {
+                    new Harvester(creep, roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING);
                 } else {
                     if (creep.memory.role == roleTypes.DESTINY_CHILD) { //Game.spawns['Spawn1'].spawnCreep([WORK, CARRY, MOVE], 'muggledy0', {'memory': {'role': 3}})
                         console.log(`destiny_child-${destiny_child_num}: ${creep.name}, room:${creep.room.name}`); //用于手动任务的执行，不纳入自动化脚本管理
