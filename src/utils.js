@@ -36,11 +36,13 @@ function sum(list, key) {
 }
 
 // 定义角色细分类型常量
+//how to add a type: https://github.com/muggledy/screeps-muggledy-js/commit/6e27a77ebf05132b8f079956030219a37250d7bf
 const roleTypes = {};
 roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN = 1;
 roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER = 2;
 roleTypes.DESTINY_CHILD = 3;
 roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING = 4;
+roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER = 5;
 
 const roleStates = {};
 roleStates.HARVESTER_HARVESTING = 0x00000001;
@@ -49,6 +51,8 @@ roleStates.HARVESTER_SUPPLYING_SPAWN = 0x00000004;
 roleStates.HARVESTER_SUPPLYING_CONTROL = 0x00000008;
 roleStates.HARVESTER_BUILDING_WALL = 0x00000010;
 roleStates.HARVESTER_REPAIRING_WALL = 0x00000020;
+roleStates.HARVESTER_BUILDING_TOWER = 0x00000040;
+roleStates.HARVESTER_REPAIRING_TOWER = 0x00000080;
 
 let g_supply_spawn_firstly = false; //一旦为true，所有creeps全部将能量优先输送给spawn
 
@@ -100,6 +104,12 @@ function print_role_state(state) {
     if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_REPAIRING_WALL)) {
         states_str.push('RW');
     }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_BUILDING_TOWER)) {
+        states_str.push('BT');
+    }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_REPAIRING_TOWER)) {
+        states_str.push('RT');
+    }
     return states_str.join('.');
 }
 
@@ -108,7 +118,7 @@ function getSpawnSurroundingPositions(spawn) {
     const spawnPos = spawn.pos;
 
     // 遍历 Spawn 周围的坐标
-    for (let dx = -1; dx <= 1; dx++) {
+    for (let dx = -1; dx <= /*1*/0; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
             // 排除 Spawn 自身的坐标
             if (dx === 0 && dy === 0) continue;
@@ -154,7 +164,7 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
     if (!spawn) {
         return;
     }
-    //1.在Swpan1周围创建扩展建筑工地
+    //1.在Swpan1周围创建扩展建筑工地（也可以在游戏界面手动放置扩展工地）
     const poss = getSpawnSurroundingPositions(spawn); //可供建筑的位置信息
     if (poss.length > 0) {
         creep.room.createConstructionSite(poss[0], STRUCTURE_EXTENSION); //可能会因为控制器等级不够无法创建太多spawn扩展工地
@@ -171,7 +181,7 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
     });
     if (extensionConstructionSites.length > 0) {
         const [totalCurrentEnergy, totalMaxEnergy] = get_room_spawn_energy_statistic(creep.room);
-        if (totalCurrentEnergy >= totalMaxEnergy) {
+        if (totalCurrentEnergy >= totalMaxEnergy) { //如果有空余的扩展，则优先填充能量，填满了，再build扩展
             const site = extensionConstructionSites[0];
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
             if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN == creep.memory.role) {
@@ -337,7 +347,7 @@ function build_defense_wall_for_spawn(creep) {
     }
     let sources = undefined;
     let direction = undefined;
-    //1.在Swpan1周围创建扩展建筑工地
+    //1.在Swpan1周围创建扩展建筑工地（也可以在游戏界面手动放置城墙工地）
     if ((spawn.memory.wall0_flag === undefined) || (spawn.memory.wall0_flag < 1)) {
         sources = creep.room.find(FIND_SOURCES_ACTIVE);
         direction = 'right';
@@ -347,22 +357,24 @@ function build_defense_wall_for_spawn(creep) {
                 direction = getRandomItemFromObject(['top','bottom','left','right']);
             }
         }
-        if (createWallConstructionSitesAroundSpawn(spawn, direction, 8)) { //金矿在spawn的哪个方位，就在哪个方位开城门
+        if (createWallConstructionSitesAroundSpawn(spawn, direction, /*8*/12)) { //金矿在spawn的哪个方位，就在哪个方位开城门
             spawn.memory.wall0_flag = 1; //表示spawn的城墙0已创建好工地
         }
     }
-    if ((spawn.memory.wall1_flag === undefined) || (spawn.memory.wall1_flag < 1)) {
-        sources = creep.room.find(FIND_SOURCES_ACTIVE);
-        direction = 'right';
-        if (sources.length > 0) {
-            direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
-            if (direction == 'inside') {
-                direction = getRandomItemFromObject(['top','bottom','left','right']);
+    if (false) {
+        if ((spawn.memory.wall1_flag === undefined) || (spawn.memory.wall1_flag < 1)) {
+            sources = creep.room.find(FIND_SOURCES_ACTIVE);
+            direction = 'right';
+            if (sources.length > 0) {
+                direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
+                if (direction == 'inside') {
+                    direction = getRandomItemFromObject(['top','bottom','left','right']);
+                }
+                //direction = getReverseDirection(direction);
             }
-            //direction = getReverseDirection(direction);
-        }
-        if (createWallConstructionSitesAroundSpawn(spawn, direction, 14)) { //金矿在spawn的哪个方位，就在哪个方位开城门
-            spawn.memory.wall1_flag = 1; //表示spawn的城墙0已创建好工地
+            if (createWallConstructionSitesAroundSpawn(spawn, direction, 18)) { //金矿在spawn的哪个方位，就在哪个方位开城门
+                spawn.memory.wall1_flag = 1; //表示spawn的城墙0已创建好工地
+            }
         }
     }
     //if (spawn.memory.wall0_flag < 2) {
@@ -443,8 +455,11 @@ function get_spawn(room, filter) {
         if (filter == 'all') {
             return spawns;
         }
+        if (filter == 'random') {
+            return getRandomItemFromObject(spawns);
+        }
         for (const spawn of spawns) {
-            return spawn;
+            return spawn; //默认没有过滤则返回第一个spawn
         }
     }
     return undefined;
@@ -472,10 +487,19 @@ function get_room_spawn_energy_statistic(room) {
     return [totalCurrentEnergy, totalMaxEnergy];
 }
 
-function isSpawnAndExtensionsEnergyHalfFull(room) { //如果房间内spawn中已存储能量超过总容量的1/2，则返回true
+function isSpawnAndExtensionsEnergyHalfFull(room) { //如果房间内spawn中已存储能量超过总容量的17/20，则返回true
     const [totalCurrentEnergy, totalMaxEnergy] = get_room_spawn_energy_statistic(room);
-    if (((room.memory.current_phase == undefined) || (room.memory.current_phase < 1)) && (totalMaxEnergy >= 450)) {
+    if (room.memory.current_phase == undefined) {
+        room.memory.current_phase = 0;
+    }
+    if ((room.memory.current_phase < 1) && (totalMaxEnergy >= 450)) {
         room.memory.current_phase = 1;
+    }
+    if ((room.memory.current_phase == 1) && (totalMaxEnergy >= 550) && (room.controller.level >= 3)) {
+        room.memory.current_phase = 2;
+    }
+    if ((room.memory.current_phase == 2) && (totalMaxEnergy >= 800)) {
+        room.memory.current_phase = 3;
     }
     console.log(`(${room.name}) current energy: ${totalCurrentEnergy}, max capacity: ${totalMaxEnergy}`);
     if (totalCurrentEnergy < 300) {
@@ -509,7 +533,7 @@ function findSafeSources(room) {
         if (nearbyHostileCreeps.length === 0) {
             room.memory.safeSourceIDList.push(source.id);
         } else {
-            console.log(`warn: ${source} at ${source.pos} is unsafe`);
+            console.log(`(${room.name}) warn: ${source} at ${source.pos} is unsafe`);
             if (!room.memory.unsafeSourceIDList.includes(source.id)) {
                 room.memory.unsafeSourceIDList.push(source.id);
             }
@@ -525,14 +549,28 @@ function getSafeSourcesListFromRoomMemory(room) {
     if (room.memory.unsafeSourceIDList == undefined) {
         room.memory.unsafeSourceIDList = [];
     }
-    for (const id of room.memory.safeSourceIDList) {
-        if (room.memory.current_phase < 2) { //在游戏前期阶段，禁止采集具有潜在危险的金矿，因为一旦creep被守卫杀死，重新创建消耗的能量太大了，得不偿失
+    let obj = null;
+    const copiedIDList = Array.from(room.memory.safeSourceIDList);
+    let index = 0;
+    for (const id of copiedIDList) {
+        if (room.memory.current_phase < 3) { //在游戏前期阶段，禁止采集具有潜在危险的金矿，因为一旦creep被守卫杀死，重新创建消耗的能量太大了，得不偿失
             if (!room.memory.unsafeSourceIDList.includes(id)) {
-                sources.push(Game.getObjectById(id));
+                obj = Game.getObjectById(id);
+                if (obj) {
+                    sources.push(obj);
+                } else {
+                    room.memory.safeSourceIDList.splice(index, 1);
+                }
             }
         } else { //游戏的高级阶段，才允许采集那些具有潜在危险的金矿
-            sources.push(Game.getObjectById(id));
+            obj = Game.getObjectById(id);
+            if (obj) {
+                sources.push(obj);
+            } else {
+                room.memory.safeSourceIDList.splice(index, 1);
+            }
         }
+        index += 1;
     }
     return sources;
 }
@@ -541,9 +579,179 @@ function detectSafeSourcesPeriodicly() { //定期检测房间内的安全的金�
     if (((Game.time % 30) == 0) || (Game.time < 10)) {
         for (const roomName in Game.rooms) {
             findSafeSources(Game.rooms[roomName]);
-            console.log(`safe sources: ${getSafeSourcesListFromRoomMemory(Game.rooms[roomName]).map(obj => obj.pos)}`);
+            console.log(`(${roomName}) safe sources: ${getSafeSourcesListFromRoomMemory(Game.rooms[roomName]).map(obj => obj.pos)}`);
         }
     }
+}
+
+function findRandomBuildLocation(spawn, n) {
+    const spawnPos = spawn.pos;
+    const possiblePositions = [];
+
+    // 遍历长宽为 n 的方形区域
+    for (let x = spawnPos.x - Math.floor(n / 2); x <= spawnPos.x + Math.floor(n / 2); x++) {
+        for (let y = spawnPos.y - Math.floor(n / 2); y <= spawnPos.y + Math.floor(n / 2); y++) {
+            if (x >= 0 && x < 50 && y >= 0 && y < 50) {
+                const pos = new RoomPosition(x, y, spawn.room.name);
+                const lookResults = pos.look();
+                let isBuildable = true;
+
+                // 检查该位置是否可建造
+                for (const result of lookResults) {
+                    if (result.type === 'terrain' && result.terrain === 'wall') {
+                        isBuildable = false;
+                        break;
+                    }
+                    if (result.type === 'structure' || result.type === 'constructionSite') {
+                        isBuildable = false;
+                        break;
+                    }
+                }
+
+                if (isBuildable) {
+                    possiblePositions.push(pos);
+                }
+            }
+        }
+    }
+
+    // 如果有可建造位置，随机选择一个
+    if (possiblePositions.length > 0) {
+        const randomIndex = Math.floor(Math.random() * possiblePositions.length);
+        return possiblePositions[randomIndex];
+    }
+
+    return null;
+}
+
+function build_tower_for_spawn(creep) {
+    const room = creep.room;
+    if (room.memory.towerIDList == undefined) {
+        room.memory.towerIDList = [];
+    }
+    //1.创建tower地基
+    if (room.memory.towerIDList.length < 3) { //房间内计划建造3座防御塔
+        const spawn = get_spawn(room, 'random');
+        const pos = findRandomBuildLocation(spawn, 10); //在spawn方圆7格内随机获取一个位置用于建造tower
+        if (pos) {
+            const ret = room.createConstructionSite(pos, STRUCTURE_TOWER);
+            if (/*ret != OK*/false) {
+                console.log(`warn: build at ${pos} failed with ${ret}`);
+            }
+        }
+    }
+    //2.建造tower
+    const constructionSites = room.find(FIND_CONSTRUCTION_SITES).filter((site) => {
+        const structure = site.structure;
+        if (site.structureType === STRUCTURE_TOWER) {
+            if (!(structure && (structure.hits === structure.hitsMax))) {
+                return true;
+            }
+        }
+        return false;
+    });
+    if (constructionSites.length > 0) {
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_TOWER);
+        console.log(`${creep.name} build tower ${constructionSites[0].pos}`);
+        if (creep.build(constructionSites[0]) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(constructionSites[0], { visualizePathStyle: { stroke: '#ffffff' } });
+        }
+        if (!room.memory.towerIDList.includes(constructionSites[0].id)) {
+            room.memory.towerIDList.push(constructionSites[0].id);
+        }
+        return;
+    }
+
+    //3.给tower提供运行的能量
+    let targets = room.find(FIND_MY_STRUCTURES, {
+        filter: (structure) => {
+            return (structure.structureType == STRUCTURE_TOWER) && 
+            (structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
+        }
+    });
+    if(targets.length > 0) {
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
+        // for (const target of targets) {
+        //     console.log(`tower at ${target.pos} has free capacity ${target.store.getFreeCapacity(RESOURCE_ENERGY)}`);
+        // }
+        targets = sorted(targets, (obj) => (obj.store.getFreeCapacity(RESOURCE_ENERGY)));
+        if (targets.length != room.memory.towerIDList.length) { //且本if块其实有点多余了，可以去掉...
+            for (const target of targets) { //我错误写成：for (const target in targets) {}，定位了将近一个小时...
+                /*for...in 循环主要用于遍历对象的可枚举属性，包括对象自身的属性以及继承的属性；for...of 循环
+                用于遍历可迭代对象，例如数组、字符串、Set、Map 等，它不能直接用于遍历普通对象 */
+                if (!room.memory.towerIDList.includes(target.id)) {
+                    room.memory.towerIDList.push(target.id);
+                }
+            }
+        }
+        console.log(`${creep.name} repair tower ${targets[0].pos}`);
+        if(creep.transfer(targets[0], RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+            creep.moveTo(targets[0], {visualizePathStyle: {stroke: '#ffffff'}});
+        }
+        return;
+    }
+    //4.没有要建造以及修复的tower，临时转去升级房间控制器
+    SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
+    console.log(`${creep.name} supply energy to room control temporarily`);
+    if(creep.upgradeController(room.controller) == ERR_NOT_IN_RANGE) {
+        creep.moveTo(room.controller, {visualizePathStyle: {stroke: '#ffffff'}});
+    }
+}
+
+function attack_enemies_with_tower() {
+    let room = null;
+    let obj = null;
+    let copiedIDList = null;
+    let index = 0;
+    let closestHostile = null;
+    let tower_num = 0;
+    let ready_tower_num = 0;
+    //let enemy_num = 0;
+    for (const roomName in Game.rooms) {
+        room = Game.rooms[roomName];
+        if (room.memory.towerIDList == undefined) {
+            room.memory.towerIDList = [];
+        }
+        tower_num = 0;
+        ready_tower_num = 0;
+        //enemy_num = 0;
+        copiedIDList = Array.from(room.memory.towerIDList);
+        index = 0;
+        for (const id of copiedIDList) {
+            obj = Game.getObjectById(id);
+            if (obj) {
+                if (obj.store[RESOURCE_ENERGY] > 10) {
+                    ready_tower_num += 1;
+                }
+                tower_num += 1;
+                closestHostile = obj.pos.findClosestByRange(FIND_HOSTILE_CREEPS);
+                if(closestHostile) {
+                    //enemy_num += 1;
+                    obj.attack(closestHostile);
+                }
+            } else {
+                room.memory.towerIDList.splice(index, 1);
+            }
+            index += 1;
+        }
+        if (/*tower_num || enemy_num*/true) {
+            console.log(`(${room.name}) ${ready_tower_num}/${tower_num} towers get ready to attack enemies`); //实际可能因为能量不足而未执行攻击动作
+        }
+    }
+}
+
+function find_creep(name) { //在控制台执行：require('./utils').find_creep('harvester_t4_11512') 来快速查找一个creep所在位置
+    const creep = Game.creeps[name];
+    if (creep) {
+        creep.say('here');
+    }
+}
+function find_creep_with_type(type) { //在控制台执行：require('./utils').find_creep_with_type(5) 来快速查找一类creeps所在位置
+    Harvester.get_alive_harvesters().forEach(harvester => {
+        if (harvester.type == type) {
+            harvester.self().say('here');
+        }
+    });
 }
 
 class Harvester {
@@ -646,6 +854,8 @@ class Harvester {
             this.run_for_harvester_energy_supply_controller_type();
         } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == this.type) {
             this.run_for_harvester_construct_defensive_building_type();
+        } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER == this.type) {
+            this.run_for_harvester_construct_tower_type();
         }
     }
 
@@ -666,7 +876,7 @@ class Harvester {
         if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING)) {
             // continue to find resource and do harvest（身上的容器未满则creep继续寻找资源并采集）
             let sources = undefined;
-            if ((creep.room.memory.safeSourceList !== undefined) && (creep.room.memory.safeSourceList.length > 0)) {
+            if ((creep.room.memory.safeSourceIDList !== undefined) && (creep.room.memory.safeSourceIDList.length > 0)) {
                 sources = getSafeSourcesListFromRoomMemory(creep.room);
             } else {
                 sources = creep.room.find(FIND_SOURCES_ACTIVE);
@@ -725,7 +935,7 @@ class Harvester {
         }
         if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING)) {
             let sources = undefined;
-            if ((creep.room.memory.safeSourceList !== undefined) && (creep.room.memory.safeSourceList.length > 0)) {
+            if ((creep.room.memory.safeSourceIDList !== undefined) && (creep.room.memory.safeSourceIDList.length > 0)) {
                 sources = getSafeSourcesListFromRoomMemory(creep.room);
             } else {
                 sources = creep.room.find(FIND_SOURCES_ACTIVE);
@@ -767,7 +977,7 @@ class Harvester {
         }
         if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING)) {
             let sources = undefined;
-            if ((creep.room.memory.safeSourceList !== undefined) && (creep.room.memory.safeSourceList.length > 0)) {
+            if ((creep.room.memory.safeSourceIDList !== undefined) && (creep.room.memory.safeSourceIDList.length > 0)) {
                 sources = getSafeSourcesListFromRoomMemory(creep.room);
             } else {
                 sources = creep.room.find(FIND_SOURCES_ACTIVE);
@@ -781,10 +991,49 @@ class Harvester {
         } else {
             if (g_supply_spawn_firstly) { //确保采集能量供养spawn的存在性
                 console.log(`${creep.name} supply energy to spawn temporarily`);
-                supply_energy_to_spawn(creep);
+                supply_energy_to_spawn(creep); //必要之时除了临时转去提供能量给spawn，也会帮助加快建设spawn扩展建筑，以提升能量可存储大小
                 return;
             }
             build_defense_wall_for_spawn(creep);
+        }
+    }
+
+    run_for_harvester_construct_tower_type() {
+        const creep = this.self(); //i.e., this.creep()
+        if (!creep) {
+            return;
+        }
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_TOWER);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_SPAWN);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
+        if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
+            SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
+        }
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store.getFreeCapacity() <= 0)) {
+            CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
+        }
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING)) {
+            let sources = undefined;
+            if ((creep.room.memory.safeSourceIDList !== undefined) && (creep.room.memory.safeSourceIDList.length > 0)) {
+                sources = getSafeSourcesListFromRoomMemory(creep.room);
+            } else {
+                sources = creep.room.find(FIND_SOURCES_ACTIVE);
+            }
+            if (sources.length > 0) {
+                const index = hash_str_to_num(creep.name, sources.length);
+                if(creep.harvest(sources[index]) == ERR_NOT_IN_RANGE) {
+                    creep.moveTo(sources[index], {visualizePathStyle: {stroke: '#ffaa00'}});
+                }
+            }
+        } else {
+            if (/*g_supply_spawn_firstly*/false) { //确保采集能量供养spawn的存在性————建造防御塔的优先级应等同能量存储，还是应尽快建立防御体系！
+                console.log(`${creep.name} supply energy to spawn temporarily`);
+                supply_energy_to_spawn(creep);
+                return;
+            }
+            build_tower_for_spawn(creep);
         }
     }
 
@@ -855,6 +1104,7 @@ class Harvester {
         let harvester_energy_supply_spawn_type_num = 0;
         let harvester_energy_supply_controller_type_num = 0;
         let harvester_construct_defensive_building_type_num = 0;
+        let harvester_construct_tower_type_num = 0;
         Harvester.get_alive_harvesters().forEach(harvester => {
             if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN == harvester.type) {
                 harvester_energy_supply_spawn_type_num += 1;
@@ -862,9 +1112,11 @@ class Harvester {
                 harvester_energy_supply_controller_type_num += 1;
             } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == harvester.type) {
                 harvester_construct_defensive_building_type_num += 1;
+            } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER == harvester.type) {
+                harvester_construct_tower_type_num += 1;
             }
         })
-        const room = get_room();
+        const room = get_room(); //room.controller.activateSafeMode()
         if (!room) {
             console.log("Error: no room exist");
             return;
@@ -878,10 +1130,13 @@ class Harvester {
             room.memory.current_phase = 0;
         }
         const spawn = sorted(spawns, (obj) => obj.energy)[0]; //getRandomItemFromObject(spawns);
-        console.log(`[2025.3.26] room: ${room.name}, phase: ${room.memory.current_phase}, current max spawn: ${spawn.name}, `+
-            `harvesters: ${harvester_energy_supply_spawn_type_num}+`+
-            `${harvester_energy_supply_controller_type_num}+${harvester_construct_defensive_building_type_num}=`+
-            `${harvester_energy_supply_spawn_type_num+harvester_energy_supply_controller_type_num+harvester_construct_defensive_building_type_num}`);
+        const controller = room.controller;
+        console.log(`(${room.name}) game_phase: ${room.memory.current_phase}, conreoller_level: ${controller.level}, `+
+            `current max spawn: ${spawn.name}, harvesters: ${harvester_energy_supply_spawn_type_num}(t${roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN}:spawn)+`+
+            `${harvester_energy_supply_controller_type_num}(t${roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER}:controller)+`+
+            `${harvester_construct_defensive_building_type_num}(t${roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}:wall)+`+
+            `${harvester_construct_tower_type_num}(t${roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER}:tower)=`+
+            `${harvester_energy_supply_spawn_type_num+harvester_energy_supply_controller_type_num+harvester_construct_defensive_building_type_num+harvester_construct_tower_type_num}`);
         let name = null;
         let body = null;
         if (harvester_energy_supply_spawn_type_num < 6) { //如果存活的能量采集者数量<6，则需要创建，否则不创建
@@ -890,6 +1145,8 @@ class Harvester {
             if (room.memory.current_phase < 1) {
                 body = [WORK, CARRY, MOVE];
             } else if (room.memory.current_phase < 2) { //当前游戏阶段，当spawn总容量达到450，进入阶段1，就可以建造具有更庞大身体部件的creeps了，譬如更多的CARRY或WORK部件
+                body = [WORK, CARRY, CARRY, CARRY, MOVE, MOVE];
+            } else {
                 body = [WORK, CARRY, CARRY, CARRY, MOVE, MOVE];
             }
             if (spawn.spawnCreep(body, name, {'memory': {'role': roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN}}) == OK) {
@@ -908,6 +1165,8 @@ class Harvester {
                 body = [WORK, CARRY, MOVE];
             } else if (room.memory.current_phase < 2) {
                 body = [WORK, CARRY, MOVE];
+            } else {
+                body = [WORK, WORK, CARRY, CARRY, MOVE, MOVE];
             }
             if (spawn.spawnCreep(body, name, {'memory': {'role': roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER}}) == OK) {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
@@ -919,9 +1178,26 @@ class Harvester {
                 body = [WORK, CARRY, MOVE];
             } else if (room.memory.current_phase < 2) {
                 body = [WORK, WORK, CARRY, MOVE];
+            } else {
+                body = [WORK, WORK, CARRY, CARRY, MOVE, MOVE];
             }
             if (spawn.spawnCreep(body, name, {'memory': {'role': roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}}) == OK) {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING);
+            }
+        }
+        if (controller.level >= 3) {
+            if (harvester_construct_tower_type_num < 3) { //创建修筑防御塔工人
+                name = `harvester_t${roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER}_${Game.time}`;
+                if (room.memory.current_phase < 1) {
+                    body = [WORK, CARRY, MOVE]; //阶段0
+                } else if (room.memory.current_phase < 2) {
+                    body = [WORK, WORK, CARRY, MOVE]; //阶段1
+                } else {
+                    body = [WORK, WORK, CARRY, CARRY, MOVE, MOVE];
+                }
+                if (spawn.spawnCreep(body, name, {'memory': {'role': roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER}}) == OK) {
+                    new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER);
+                }
             }
         }
     }
@@ -936,6 +1212,8 @@ class Harvester {
                     new Harvester(creep, roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
                 } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING == creep.memory.role) {
                     new Harvester(creep, roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING);
+                } else if (roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER == creep.memory.role) {
+                    new Harvester(creep, roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER);
                 } else {
                     if (creep.memory.role == roleTypes.DESTINY_CHILD) { //Game.spawns['Spawn1'].spawnCreep([WORK, CARRY, MOVE], 'muggledy0', {'memory': {'role': 3}})
                         console.log(`destiny_child-${destiny_child_num}: ${creep.name}, room:${creep.room.name}`); //用于手动任务的执行，不纳入自动化脚本管理
@@ -950,5 +1228,5 @@ class Harvester {
 }
 
 module.exports = {
-    Harvester, detectSafeSourcesPeriodicly
+    Harvester, detectSafeSourcesPeriodicly, attack_enemies_with_tower, find_creep, find_creep_with_type
 };

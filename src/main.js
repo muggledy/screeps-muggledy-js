@@ -2,8 +2,9 @@ const utils = require('./utils');
 const { Harvester } = require('./utils');
 
 function main() {
-    console.log(`===> tick ${Game.time}`);
+    console.log(`===> [2025.3.29/3] tick ${Game.time}`);
     utils.detectSafeSourcesPeriodicly();
+    utils.attack_enemies_with_tower();
     Harvester.do_register();
     Harvester.generate_harvesters();
     Harvester.print_all_harvesters();

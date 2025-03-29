@@ -10,5 +10,6 @@
     3. when the original spawn energy is full, the 3 type-1 creeps will goto build spawn extension
     4. when the spawn extension is also full of energy, the 3 type-1 creeps will also goto upgrade the room controller
     5. after step 2 is completed, continue to gernerate 3 type-4 creeps to build the city wall
-    6. ...
+    6. when the room controller level >=3, create 3 creeps to build towers to attack enemies
+    7. ...
     ```
