@@ -119,7 +119,7 @@ function getSpawnSurroundingPositions(spawn) {
 
     // 遍历 Spawn 周围的坐标
     for (let dx = -1; dx <= /*1*/0; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
+        for (let dy = /*-1*/0; dy <= 1; dy++) {
             // 排除 Spawn 自身的坐标
             if (dx === 0 && dy === 0) continue;
 
@@ -164,7 +164,7 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
     if (!spawn) {
         return;
     }
-    //1.在Swpan1周围创建扩展建筑工地（也可以在游戏界面手动放置扩展工地）
+    //1.在Swpan1周围创建扩展建筑工地（也可以在游戏界面手动放置扩展工地，当前代码会在spawn周围自动创建3个工地）
     const poss = getSpawnSurroundingPositions(spawn); //可供建筑的位置信息
     if (poss.length > 0) {
         creep.room.createConstructionSite(poss[0], STRUCTURE_EXTENSION); //可能会因为控制器等级不够无法创建太多spawn扩展工地
@@ -340,25 +340,55 @@ function getReverseDirection(direction) {
     }
 }
 
+function repair_dying_ramparts(creep) {
+    const room = creep.room;
+    // 查找房间内所有的 Rampart 筛选出即将消失的 Rampart（rampart会定期衰减，一旦衰减hits降至0，那就会消亡!）
+    const decayingRamparts = room.find(FIND_MY_STRUCTURES, {
+        filter: (structure) => {
+            return structure.structureType === STRUCTURE_RAMPART && 
+                   structure.hits < /*structure.hitsMax * 0.1*/2000; // 设置你需要的阈值，比如10%
+        }
+    });
+
+    // 安排 Creep 进行修复
+    if (decayingRamparts.length > 0) {
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
+        console.log(`${creep.name} repair dying rampart ${decayingRamparts[0].pos}(hits:${decayingRamparts[0].hits}/${decayingRamparts[0].hitsMax})`);
+        creep.say(decayingRamparts[0].hits);
+        if (creep.repair(decayingRamparts[0]) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(decayingRamparts[0]);
+        }
+        return true; //表示执行过了修复任务
+    }
+    return false;
+}
+
 function build_defense_wall_for_spawn(creep) {
+    let sources = undefined;
+    let direction = undefined;
+
     const spawn = get_spawn(creep.room, null);
     if (!spawn) {
         return;
     }
-    let sources = undefined;
-    let direction = undefined;
-    //1.在Swpan1周围创建扩展建筑工地（也可以在游戏界面手动放置城墙工地）
-    if ((spawn.memory.wall0_flag === undefined) || (spawn.memory.wall0_flag < 1)) {
-        sources = creep.room.find(FIND_SOURCES_ACTIVE);
-        direction = 'right';
-        if (sources.length > 0) {
-            direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
-            if (direction == 'inside') {
-                direction = getRandomItemFromObject(['top','bottom','left','right']);
+    //0.找到将要损坏消失的城墙（ramparts），以最高优先级立即repair修复它！
+    if (repair_dying_ramparts(creep)) {
+        return;
+    }
+    //1.在Swpan1周围创建扩展建筑工地（建议在游戏界面手动放置城墙工地，而不是通过代码自动创建，代码创建的城墙位置固定，位置可能不合理）
+    if (false) { //建议置为false
+        if ((spawn.memory.wall0_flag === undefined) || (spawn.memory.wall0_flag < 1)) {
+            sources = creep.room.find(FIND_SOURCES_ACTIVE);
+            direction = 'right';
+            if (sources.length > 0) {
+                direction = getSourceDirectionRelativeToWall(spawn, sources[0]);
+                if (direction == 'inside') {
+                    direction = getRandomItemFromObject(['top','bottom','left','right']);
+                }
             }
-        }
-        if (createWallConstructionSitesAroundSpawn(spawn, direction, /*8*/12)) { //金矿在spawn的哪个方位，就在哪个方位开城门
-            spawn.memory.wall0_flag = 1; //表示spawn的城墙0已创建好工地
+            if (createWallConstructionSitesAroundSpawn(spawn, direction, /*8*/18)) { //金矿在spawn的哪个方位，就在哪个方位开城门
+                spawn.memory.wall0_flag = 1; //表示spawn的城墙0已创建好工地
+            }
         }
     }
     if (false) {
@@ -372,7 +402,7 @@ function build_defense_wall_for_spawn(creep) {
                 }
                 //direction = getReverseDirection(direction);
             }
-            if (createWallConstructionSitesAroundSpawn(spawn, direction, 18)) { //金矿在spawn的哪个方位，就在哪个方位开城门
+            if (createWallConstructionSitesAroundSpawn(spawn, direction, 23)) { //金矿在spawn的哪个方位，就在哪个方位开城门
                 spawn.memory.wall1_flag = 1; //表示spawn的城墙0已创建好工地
             }
         }
@@ -381,7 +411,7 @@ function build_defense_wall_for_spawn(creep) {
         //2.找到(过滤出)已存在的且!(structure属性存在且建筑的 hits 是否等于 hitsMax)（表示扩展建筑尚未build建造完成）的城墙建筑工地，继续建造
         const constructionSites = creep.room.find(FIND_CONSTRUCTION_SITES).filter((site) => {
             const structure = site.structure;
-            if (site.structureType === STRUCTURE_WALL) {
+            if ((site.structureType === STRUCTURE_RAMPART) || (site.structureType === STRUCTURE_WALL)) {
                 if (!(structure && (structure.hits === structure.hitsMax))) {
                     return true;
                 }
@@ -390,7 +420,7 @@ function build_defense_wall_for_spawn(creep) {
         });
         if (constructionSites.length > 0) {
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_WALL);
-            console.log(`${creep.name} build wall ${constructionSites[0].pos}`);
+            console.log(`${creep.name} build wall ${constructionSites[0].pos}${(constructionSites[0].structureType === STRUCTURE_RAMPART) ? "(rampart)" : ""}`);
             if (creep.build(constructionSites[0]) === ERR_NOT_IN_RANGE) {
                 creep.moveTo(constructionSites[0], { visualizePathStyle: { stroke: '#ffffff' } });
             }
@@ -401,19 +431,26 @@ function build_defense_wall_for_spawn(creep) {
     //3.修理城墙，提升耐久值
     // 查找需要修理的城墙
     let walls = creep.room.find(FIND_STRUCTURES, {
-        filter: (structure) => structure.structureType === STRUCTURE_WALL && structure.hits < structure.hitsMax
+        filter: (structure) => ((structure.structureType === STRUCTURE_RAMPART) || (structure.structureType === STRUCTURE_WALL)) && structure.hits < structure.hitsMax
     });
     walls = sorted(walls, (obj) => (-obj.hits)); //以期找到耐久值最低的城墙优先进行repair，防止长时间陷入只对一个城墙进行repair的不公平情况
     // 执行修理
     if (walls.length > 0) {
         SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
-        console.log(`${creep.name} repair wall ${walls[0].pos}`);
+        console.log(`${creep.name} repair wall ${walls[0].pos}${(walls[0].structureType === STRUCTURE_RAMPART) ? "(rampart)" : ""}`+
+            `(hits:${walls[0].hits}/${walls[0].hitsMax})`);
         if (creep.repair(walls[0]) === ERR_NOT_IN_RANGE) {
             creep.moveTo(walls[0], { visualizePathStyle: { stroke: '#ffffff' } });
         }
         return;
     }
-    //4.如果城墙建造完毕也没有要维修的城墙，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
+    //4.如果城墙建造完毕也没有要维修的城墙且需要给spawn输血，则转去给spawn输送能量
+    if (g_supply_spawn_firstly) { //确保采集能量供养spawn的存在性
+        console.log(`${creep.name} supply energy to spawn temporarily`);
+        supply_energy_to_spawn(creep);
+        return;
+    }
+    //5.如果以上步骤均为走进，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(creep.room.controller) == ERR_NOT_IN_RANGE) {
@@ -624,13 +661,14 @@ function findRandomBuildLocation(spawn, n) {
     return null;
 }
 
+//建筑介绍：https://www.bilibili.com/video/BV1uE41147fq
 function build_tower_for_spawn(creep) {
     const room = creep.room;
     if (room.memory.towerIDList == undefined) {
         room.memory.towerIDList = [];
     }
     //1.创建tower地基
-    if (room.memory.towerIDList.length < 3) { //房间内计划建造3座防御塔
+    if (room.memory.towerIDList.length < 1) { //房间内计划建造1座防御塔（自动化建造1座，更多建议手动合理安排其他tower建造工地位置）
         const spawn = get_spawn(room, 'random');
         const pos = findRandomBuildLocation(spawn, 10); //在spawn方圆7格内随机获取一个位置用于建造tower
         if (pos) {
@@ -640,7 +678,7 @@ function build_tower_for_spawn(creep) {
             }
         }
     }
-    //2.建造tower
+    //2.找到tower工地执行建造
     const constructionSites = room.find(FIND_CONSTRUCTION_SITES).filter((site) => {
         const structure = site.structure;
         if (site.structureType === STRUCTURE_TOWER) {
@@ -662,7 +700,7 @@ function build_tower_for_spawn(creep) {
         return;
     }
 
-    //3.给tower提供运行的能量
+    //3.给房间内的tower输送（提供）运行的能量
     let targets = room.find(FIND_MY_STRUCTURES, {
         filter: (structure) => {
             return (structure.structureType == STRUCTURE_TOWER) && 
@@ -690,7 +728,14 @@ function build_tower_for_spawn(creep) {
         }
         return;
     }
-    //4.没有要建造以及修复的tower，临时转去升级房间控制器
+
+    //4.没有要建造以及修复的tower，并且spawn能量急缺，则转去为spawn输送能量以及建造spawn扩展
+    if (g_supply_spawn_firstly) {
+        console.log(`${creep.name} supply energy to spawn temporarily`);
+        supply_energy_to_spawn(creep);
+        return;
+    }
+    //5.前面的任务都走不进去，临时转去升级房间控制器
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(room.controller) == ERR_NOT_IN_RANGE) {
@@ -949,7 +994,7 @@ class Harvester {
         } else {
             if (g_supply_spawn_firstly) {
                 console.log(`${creep.name} supply energy to spawn temporarily`);
-                supply_energy_to_spawn(creep);
+                supply_energy_to_spawn(creep); //必要之时(g_supply_spawn_firstly==true)除了临时转去提供能量给spawn，也会帮助加快建设spawn扩展建筑，以提升能量可存储大小
                 return;
             }
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
@@ -989,11 +1034,6 @@ class Harvester {
                 }
             }
         } else {
-            if (g_supply_spawn_firstly) { //确保采集能量供养spawn的存在性
-                console.log(`${creep.name} supply energy to spawn temporarily`);
-                supply_energy_to_spawn(creep); //必要之时除了临时转去提供能量给spawn，也会帮助加快建设spawn扩展建筑，以提升能量可存储大小
-                return;
-            }
             build_defense_wall_for_spawn(creep);
         }
     }
@@ -1028,11 +1068,6 @@ class Harvester {
                 }
             }
         } else {
-            if (/*g_supply_spawn_firstly*/false) { //确保采集能量供养spawn的存在性————建造防御塔的优先级应等同能量存储，还是应尽快建立防御体系！
-                console.log(`${creep.name} supply energy to spawn temporarily`);
-                supply_energy_to_spawn(creep);
-                return;
-            }
             build_tower_for_spawn(creep);
         }
     }
@@ -1172,7 +1207,7 @@ class Harvester {
                 new Harvester(Game.creeps[name], roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_CONTROLLER);
             }
         }
-        if (harvester_construct_defensive_building_type_num < 4) { //创建修筑(及维修)防御工事工人
+        if (harvester_construct_defensive_building_type_num < 5) { //创建修筑(及维修)防御工事工人
             name = `harvester_t${roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING}_${Game.time}`;
             if (room.memory.current_phase < 1) {
                 body = [WORK, CARRY, MOVE];
