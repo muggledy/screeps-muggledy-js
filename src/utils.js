@@ -55,6 +55,8 @@ roleStates.HARVESTER_REPAIRING_WALL = 0x00000020;
 roleStates.HARVESTER_BUILDING_TOWER = 0x00000040;
 roleStates.HARVESTER_REPAIRING_TOWER = 0x00000080;
 roleStates.HARVESTER_BUILDING_ROAD = 0x00000100;
+roleStates.HARVESTER_PICKING_DEAD_BODY = 0x00000200;
+roleStates.HARVESTER_REPAIRING_ROAD = 0x00000400;
 
 let g_supply_spawn_firstly = false; //一旦为true，所有creeps全部将能量优先输送给spawn
 
@@ -114,6 +116,12 @@ function print_role_state(state) {
     }
     if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_BUILDING_ROAD)) {
         states_str.push('BR');
+    }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_PICKING_DEAD_BODY)) {
+        states_str.push('PD');
+    }
+    if (TST_FLAG(tmp, 'state', roleStates.HARVESTER_REPAIRING_ROAD)) {
+        states_str.push('RR');
     }
     return states_str.join('.');
 }
@@ -230,7 +238,14 @@ function build_and_supply_energy_for_spawn_extension(creep) { //建造spawn扩�
         }
         return;
     }
-    //4.如果当前spawn以及spawn扩展全部填满了能量，即以上步骤2、3逻辑都未走进去，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
+    //4.如果是t1型creep，必要时需要为tower输送能量
+    if (creep.memory.role == roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN) {
+        if (supply_energy_to_tower(creep.room, creep, 200)) { //tower存储能量低于(1000-200)时，t1型creep临时转去向tower输送能量
+            console.log(`${creep.name} supply energy to tower temporarily`);
+            return;
+        }
+    }
+    //5.如果当前spawn以及spawn扩展全部填满了能量，即以上步骤逻辑都未走进去，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     if (roleTypes.HARVESTER_TYPE_SUPPLY_ENERGY_FOR_SPAWN == creep.memory.role) {
         console.log(`${creep.name} supply energy to room control temporarily`);
@@ -376,21 +391,29 @@ function structure_say(room, structure, text) {
 function repair_dying_ramparts(creep) {
     const room = creep.room;
     // 查找房间内所有的 Rampart 筛选出即将消失的 Rampart（rampart会定期衰减，一旦衰减hits降至0，那就会消亡!）
+    if (room.memory.minWallHits == undefined) {
+        room.memory.minWallHits = 2500;
+    }
     const decayingRamparts = room.find(FIND_MY_STRUCTURES, {
         filter: (structure) => {
             return structure.structureType === STRUCTURE_RAMPART && 
-                   structure.hits < /*structure.hitsMax * 0.1*/2300; // 设置你需要的阈值，比如10%
+                   structure.hits < /*structure.hitsMax * 0.1*/room.memory.minWallHits; // 设置你需要的阈值，比如10%
         }
     });
 
     // 安排 Creep 进行修复
     if (decayingRamparts.length > 0) {
         SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
-        console.log(`${creep.name} repair dying rampart ${decayingRamparts[0].pos}(hits:${decayingRamparts[0].hits}/${decayingRamparts[0].hitsMax})`);
-        creep.say(decayingRamparts[0].hits);
-        structure_say(creep.room, decayingRamparts[0], String(decayingRamparts[0].hits));
-        if (creep.repair(decayingRamparts[0]) === ERR_NOT_IN_RANGE) {
-            creep.moveTo(decayingRamparts[0], {visualizePathStyle: {stroke: '#ffffff'}});
+        let targetRampart = decayingRamparts[0]; //不同creeps集中修理一个城墙
+        targetRampart = decayingRamparts[hash_str_to_num(creep.name, decayingRamparts.length)]; //不同creeps分散修理不同的城墙
+        if (creep.memory.role == roleTypes.HARVESTER_TYPE_CONSTRUCT_DEFENSIVE_BUILDING) {
+            console.log(`${creep.name} repair dying rampart ${targetRampart.pos}(hits:${targetRampart.hits}/${targetRampart.hitsMax}), `+
+                `minWallHits:${room.memory.minWallHits}, total:${decayingRamparts.length}`);
+            creep.say(targetRampart.hits);
+            structure_say(creep.room, targetRampart, String(targetRampart.hits));
+        }
+        if (creep.repair(targetRampart) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(targetRampart, {visualizePathStyle: {stroke: '#ffffff'}});
         }
         return true; //表示执行过了修复任务
     }
@@ -468,11 +491,17 @@ function build_defense_wall_for_spawn(creep) {
         filter: (structure) => ((structure.structureType === STRUCTURE_RAMPART) || (structure.structureType === STRUCTURE_WALL)) && structure.hits < structure.hitsMax
     });
     walls = sorted(walls, (obj) => (-obj.hits)); //以期找到耐久值最低的城墙优先进行repair，防止长时间陷入只对一个城墙进行repair的不公平情况
+    if (creep.room.memory.minWallHits == undefined) {
+        creep.room.memory.minWallHits = 2500; //初始目标
+    }
+    if (walls[0].hits >= creep.room.memory.minWallHits) { //迭代优化、稳定提升“城墙最低血条阈值”的关键，否则若不给出更高的目标会发现城墙hits始终提升不上去
+        creep.room.memory.minWallHits += 500;
+    }
     // 执行修理
     if (walls.length > 0) {
         SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
         console.log(`${creep.name} repair wall ${walls[0].pos}${(walls[0].structureType === STRUCTURE_RAMPART) ? "(rampart)" : ""}`+
-            `(hits:${walls[0].hits}/${walls[0].hitsMax})`);
+            `(hits:${walls[0].hits}/${walls[0].hitsMax}), minWallHits:${walls[0].hits}/${creep.room.memory.minWallHits}`);
         if (creep.repair(walls[0]) === ERR_NOT_IN_RANGE) {
             creep.moveTo(walls[0], { visualizePathStyle: { stroke: '#ffffff' } });
         }
@@ -484,7 +513,7 @@ function build_defense_wall_for_spawn(creep) {
         supply_energy_to_spawn(creep);
         return;
     }
-    //5.如果以上步骤均为走进，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
+    //5.如果以上步骤均未走进，总不能闲着不动吧，那就临时转去向房间控制器输送能量吧
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(creep.room.controller) == ERR_NOT_IN_RANGE) {
@@ -695,6 +724,42 @@ function findRandomBuildLocation(spawn, n) {
     return null;
 }
 
+function supply_energy_to_tower(room, creep, free_capacity_threshold) { //针对那些空闲容量>free_capacity_threshold阈值的tower进行能量输送
+    if (free_capacity_threshold == undefined) {
+        free_capacity_threshold = 0;
+    }
+    let targets = room.find(FIND_MY_STRUCTURES, {
+        filter: (structure) => {
+            return (structure.structureType == STRUCTURE_TOWER) && 
+            (structure.store.getFreeCapacity(RESOURCE_ENERGY) > free_capacity_threshold);
+        }
+    });
+    if(targets.length > 0) {
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
+        // for (const target of targets) {
+        //     console.log(`tower at ${target.pos} has free capacity ${target.store.getFreeCapacity(RESOURCE_ENERGY)}`);
+        // }
+        targets = sorted(targets, (obj) => (obj.store.getFreeCapacity(RESOURCE_ENERGY)));
+        if (targets.length != room.memory.towerIDList.length) { //且本if块其实有点多余了，可以去掉...
+            for (const target of targets) { //我错误写成：for (const target in targets) {}，定位了将近一个小时...
+                /*for...in 循环主要用于遍历对象的可枚举属性，包括对象自身的属性以及继承的属性；for...of 循环
+                用于遍历可迭代对象，例如数组、字符串、Set、Map 等，它不能直接用于遍历普通对象 */
+                if (!room.memory.towerIDList.includes(target.id)) {
+                    room.memory.towerIDList.push(target.id);
+                }
+            }
+        }
+        if (creep.memory.role == roleTypes.HARVESTER_TYPE_CONSTRUCT_TOWER) {
+            console.log(`${creep.name} repair tower ${targets[0].pos}(${targets[0].energy}/${targets[0].energyCapacity})`);
+        }
+        if(creep.transfer(targets[0], RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
+            creep.moveTo(targets[0], {visualizePathStyle: {stroke: '#ffffff'}});
+        }
+        return true;
+    }
+    return false;
+}
+
 //建筑介绍：https://www.bilibili.com/video/BV1uE41147fq
 function build_tower_for_spawn(creep) {
     const room = creep.room;
@@ -733,33 +798,8 @@ function build_tower_for_spawn(creep) {
         }
         return;
     }
-
     //3.给房间内的tower输送（提供）运行的能量
-    let targets = room.find(FIND_MY_STRUCTURES, {
-        filter: (structure) => {
-            return (structure.structureType == STRUCTURE_TOWER) && 
-            (structure.store.getFreeCapacity(RESOURCE_ENERGY) > 0);
-        }
-    });
-    if(targets.length > 0) {
-        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
-        // for (const target of targets) {
-        //     console.log(`tower at ${target.pos} has free capacity ${target.store.getFreeCapacity(RESOURCE_ENERGY)}`);
-        // }
-        targets = sorted(targets, (obj) => (obj.store.getFreeCapacity(RESOURCE_ENERGY)));
-        if (targets.length != room.memory.towerIDList.length) { //且本if块其实有点多余了，可以去掉...
-            for (const target of targets) { //我错误写成：for (const target in targets) {}，定位了将近一个小时...
-                /*for...in 循环主要用于遍历对象的可枚举属性，包括对象自身的属性以及继承的属性；for...of 循环
-                用于遍历可迭代对象，例如数组、字符串、Set、Map 等，它不能直接用于遍历普通对象 */
-                if (!room.memory.towerIDList.includes(target.id)) {
-                    room.memory.towerIDList.push(target.id);
-                }
-            }
-        }
-        console.log(`${creep.name} repair tower ${targets[0].pos}`);
-        if(creep.transfer(targets[0], RESOURCE_ENERGY) == ERR_NOT_IN_RANGE) {
-            creep.moveTo(targets[0], {visualizePathStyle: {stroke: '#ffffff'}});
-        }
+    if (supply_energy_to_tower(room, creep, 0)) {
         return;
     }
 
@@ -769,7 +809,12 @@ function build_tower_for_spawn(creep) {
         supply_energy_to_spawn(creep);
         return;
     }
-    //5.前面的任务都走不进去，临时转去升级房间控制器
+    //5.找到将要损坏消失的城墙（ramparts），这个事情比较紧急，让我们帮助城墙修理工一起快速repair修复它！
+    if (repair_dying_ramparts(creep)) {
+        console.log(`${creep.name} repair dying rampart temporarily`);
+        return;
+    }
+    //6.前面的任务都走不进去，临时转去升级房间控制器
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(room.controller) == ERR_NOT_IN_RANGE) {
@@ -777,9 +822,57 @@ function build_tower_for_spawn(creep) {
     }
 }
 
+function repair_dying_roads(creep) {
+    const room = creep.room;
+    const roadsToRepair = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_ROAD && structure.hits < 2500
+    });
+    // const roadsToRepair = roads.filter((road) => {
+    //     return road.hits < 2500;
+    // });
+    //###打印所有roads的血条（从小到大序）
+    const sorted_roads = sorted(/*roads*/roadsToRepair, (obj) => (-obj.hits));
+    const hitsValues = sorted_roads.map(structure => structure.hits);
+    const hitsString = hitsValues.slice(0,10).join(' ');
+    //console.log(`dying roads num ${roadsToRepair.length}: ${hitsString} ...`);    
+    //###打印结束
+    if (roadsToRepair.length > 0) {
+        const road = roadsToRepair[hash_str_to_num(creep.name, roadsToRepair.length)]; //sorted_roads[0];
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_ROAD);
+        console.log(`${creep.name} repair dying road at ${road.pos}(${road.hits}/${road.hitsMax}), total dying roads:${roadsToRepair.length}(${hitsString} ...)`);
+        if (creep.repair(road) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(road, {visualizePathStyle: {stroke: '#ffffff'}});
+        }
+        return true; //表示执行了repair任务
+    }
+    return false;
+}
+
+function repair_roads(creep) {
+    const room = creep.room;
+    const roadsToRepair = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_ROAD && structure.hits < 5000
+    });
+    //const sortedRoadsToRepair = sorted(roadsToRepair, (obj) => (-obj.hits));
+    if (roadsToRepair.length > 0) {
+        const road = roadsToRepair[hash_str_to_num(creep.name, roadsToRepair.length)]; //sortedRoadsToRepair[0];
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_ROAD);
+        console.log(`${creep.name} repair road at ${road.pos}(${road.hits}/${road.hitsMax})`);
+        if (creep.repair(road) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(road, {visualizePathStyle: {stroke: '#ffffff'}});
+        }
+        return true; //表示执行了repair任务
+    }
+    return false;
+}
+
 function build_road_for_spawn(creep) {
     const room = creep.room;
-    //1.找到road建筑工地（需手动放置）进行build
+    //1.筛选出急需维修的道路（这里假设生命值低于 2500 时需要维修）
+    if (repair_dying_roads(creep)) {
+        return;
+    }
+    //2.找到road建筑工地（需手动放置）进行build
     const constructionSites = room.find(FIND_CONSTRUCTION_SITES, {
         filter: (site) => site.structureType === STRUCTURE_ROAD
     });
@@ -791,18 +884,126 @@ function build_road_for_spawn(creep) {
         }
         return;
     }
-    //2.没有要建造road，并且spawn能量急缺，则转去为spawn输送能量以及建造spawn扩展
+
+    //3.没有要建造road，并且spawn能量急缺，则转去为spawn输送能量以及建造spawn扩展
     if (g_supply_spawn_firstly) {
         console.log(`${creep.name} supply energy to spawn temporarily`);
         supply_energy_to_spawn(creep);
         return;
     }
-    //3.前面的任务都走不进去，临时转去升级房间控制器
+    //4.找到将要损坏消失的城墙（ramparts），这个事情比较紧急，让我们帮助城墙修理工一起快速repair修复它！
+    if (repair_dying_ramparts(creep)) {
+        console.log(`${creep.name} repair dying rampart temporarily`);
+        return;
+    }
+    //5.继续修理roads
+    if (repair_roads(creep)) {
+        return;
+    }
+    //6.前面的任务都走不进去，临时转去升级房间控制器
     SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
     console.log(`${creep.name} supply energy to room control temporarily`);
     if(creep.upgradeController(room.controller) == ERR_NOT_IN_RANGE) {
         creep.moveTo(room.controller, {visualizePathStyle: {stroke: '#ffffff'}});
     }
+}
+
+function heal_creeps_with_tower(room, tower, coefficient) {
+    if (((tower.energy-10) / tower.energyCapacity) < (1-coefficient)) { //和平时期tower最多可以拿出38%的能量用于治疗友军或其他非攻击守卫任务
+        return false;
+    }
+    const creepsToHeal = room.find(FIND_MY_CREEPS, {
+        filter: (creep) => creep.hits < creep.hitsMax
+    });
+
+    const sortedCreepsToHeal = sorted(creepsToHeal, (obj) => (-obj.hits));
+    // 安排防御塔治疗 Creep
+    if (creepsToHeal.length > 0) {
+        for (let i = 0; i < sortedCreepsToHeal.length; i++) {
+            const targetCreep = sortedCreepsToHeal[i];
+            if ((targetCreep.ticksToLive !== undefined) && (targetCreep.ticksToLive < 300)) { //ticksToLive不足300，没必要施救了
+                continue;
+            }
+            if (tower.heal(targetCreep) === OK) {
+                console.log(`(${room.name}) tower ${tower.pos}(${tower.energy}/${tower.energyCapacity}) is healing creep `+
+                    `${targetCreep.name}(${targetCreep.hits}/${targetCreep.hitsMax})`);
+                targetCreep.say("healing");
+                return true; // 找到可治疗的 Creep 后，结束
+            }
+        }
+    }
+    return false;
+}
+
+function repair_dying_roads_with_tower(room, tower, coefficient) {
+    if (((tower.energy-10) / tower.energyCapacity) < (1-coefficient)) { //和平时期tower最多可以拿出38%的能量用于修理道路
+        return false;
+    }
+    // 查找需要修理的道路（生命值低于2500的dying道路）
+    const buffer = 200;
+    const roadsToRepair = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_ROAD && structure.hits < (2500+buffer)
+    });
+
+    const sortedRoadsToRepair = sorted(roadsToRepair, (obj) => (-obj.hits));
+    if (roadsToRepair.length > 0) {
+        for (let i = 0; i < sortedRoadsToRepair.length; i++) {
+            const targetRoad = sortedRoadsToRepair[i];
+            if (tower.repair(targetRoad) === OK) { //tower修路就是NND快哈，creep可慢了
+                console.log(`(${room.name}) tower ${tower.pos}(${tower.energy}/${tower.energyCapacity}) is repairing road(<${(2500+buffer)}) `+
+                    `${targetRoad.pos}(${targetRoad.hits}/${targetRoad.hitsMax})`);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function repair_dying_ramparts_with_tower(room, tower, coefficient) {
+    if (((tower.energy-10) / tower.energyCapacity) < (1-coefficient)) { //和平时期tower最多可以拿出38%的能量用于修理城墙。必须全天候保证tower至少62%的能量用于随时进攻来犯之敌
+        return false;
+    }
+    // 查找需要修理的城墙（生命值低于minWallHits+buffer的dying ramparts），此处buffer=150，即tower会多帮助creep修复一点城墙，
+    // 这样creep可以不用疲于频繁地被打断正在修理的walls而去修理dying的ramparts，有助于稍稍加快提升全体walls/ramparts的最低血条值(也就是提升minWallHits)
+    const buffer = 200;
+    const rampartsToRepair = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_RAMPART && structure.hits < (room.memory.minWallHits+buffer)
+    });
+
+    const sortedRampartsToRepair = sorted(rampartsToRepair, (obj) => (-obj.hits));
+    if (rampartsToRepair.length > 0) {
+        for (let i = 0; i < sortedRampartsToRepair.length; i++) {
+            const targetRampart = sortedRampartsToRepair[i];
+            if (tower.repair(targetRampart) === OK) {
+                console.log(`(${room.name}) tower ${tower.pos}(${tower.energy}/${tower.energyCapacity}) is repairing rampart(<${(room.memory.minWallHits+buffer)}) `+
+                    `${targetRampart.pos}(${targetRampart.hits}/${targetRampart.hitsMax})`);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+function repair_walls_with_tower(room, tower, coefficient) {
+    if (((tower.energy-10) / tower.energyCapacity) < (1-coefficient)) { //和平时期tower最多可以拿出10%的能量用于修理walls。必须全天候保证tower至少60%的能量用于随时进攻来犯之敌
+        return false;
+    }
+    const wallsToRepair = room.find(FIND_STRUCTURES, {
+        filter: (structure) => structure.structureType === STRUCTURE_WALL && structure.hits < (room.memory.minWallHits)
+    });
+
+    const sortedWallsToRepair = sorted(wallsToRepair, (obj) => (-obj.hits));
+    if (wallsToRepair.length > 0) {
+        for (let i = 0; i < sortedWallsToRepair.length; i++) {
+            const targetWall = sortedWallsToRepair[i];
+            if (tower.repair(targetWall) === OK) {
+                console.log(`(${room.name}) tower ${tower.pos}(${tower.energy}/${tower.energyCapacity}) is repairing wall(<${(room.memory.minWallHits)}) `+
+                    `${targetWall.pos}(${targetWall.hits}/${targetWall.hitsMax})`);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 function attack_enemies_with_tower() {
@@ -835,6 +1036,14 @@ function attack_enemies_with_tower() {
                 if(closestHostile) {
                     //enemy_num += 1;
                     obj.attack(closestHostile);
+                } else { //如果没有敌人，则尝试去治疗友军、修理dying建筑工事
+                    if (!heal_creeps_with_tower(room, obj, 0.38)) {
+                        if (!repair_dying_ramparts_with_tower(room, obj, 0.38)) {
+                            if (!repair_dying_roads_with_tower(room, obj, 0.38)) {
+                                repair_walls_with_tower(room, obj, 0.38);
+                            }
+                        }
+                    }
                 }
             } else {
                 room.memory.towerIDList.splice(index, 1);
@@ -859,6 +1068,22 @@ function find_creep_with_type(type) { //在控制台执行：require('./utils').
             harvester.self().say('here');
         }
     });
+}
+
+function find_dropped_resource(creep) {
+    const droppedResources = creep.room.find(FIND_DROPPED_RESOURCES);
+    if (droppedResources.length > 0) {
+        const targetResource = droppedResources[hash_str_to_num(creep.name, droppedResources.length)]; //find_recent_obj_to_creep(creep, droppedResources); //droppedResources[0];
+        SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_PICKING_DEAD_BODY);
+        console.log(`${creep.name} pick up dead body at ${targetResource.pos}`);
+        creep.say(`${targetResource.pos.x},${targetResource.pos.y}`);
+        structure_say(creep.room, targetResource, "resource");
+        if (creep.pickup(targetResource) === ERR_NOT_IN_RANGE) {
+            creep.moveTo(targetResource, {visualizePathStyle: {stroke: '#ffffff'}});
+        }
+        return true; //表示找到了掉落资源要去拾取，后续不应再去做其他任务了
+    }
+    return false;
 }
 
 class Harvester {
@@ -976,6 +1201,8 @@ class Harvester {
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_SPAWN);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_PICKING_DEAD_BODY);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
         if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
         }
@@ -1035,7 +1262,14 @@ class Harvester {
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_SPAWN);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_PICKING_DEAD_BODY);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_TOWER);
         //creep如果身上一点能量都没有了，就去矿场采集能量，身上满了之后，就输送给房间控制器
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store.getFreeCapacity() > 0)) {
+            if (find_dropped_resource(creep)) { //控制器升级工额外负责房间内掉落资源的拾取，且creep身上的资源全部卸载掉之后才应去拾取
+                return;
+            }
+        }
         if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
         }
@@ -1059,6 +1293,10 @@ class Harvester {
             if (g_supply_spawn_firstly) {
                 console.log(`${creep.name} supply energy to spawn temporarily`);
                 supply_energy_to_spawn(creep); //必要之时(g_supply_spawn_firstly==true)除了临时转去提供能量给spawn，也会帮助加快建设spawn扩展建筑，以提升能量可存储大小
+                return;
+            }
+            if (supply_energy_to_tower(creep.room, creep, 500)) { //tower存储能量低于(1000-500)时，t2型creep临时转去向tower输送能量
+                console.log(`${creep.name} supply energy to tower temporarily`);
                 return;
             }
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
@@ -1112,6 +1350,7 @@ class Harvester {
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_SPAWN);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
         if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
         }
@@ -1142,9 +1381,17 @@ class Harvester {
             return;
         }
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_ROAD);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_ROAD);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_CONTROL);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_SUPPLYING_SPAWN);
         CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_BUILDING_SPAWN);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_REPAIRING_WALL);
+        CLR_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_PICKING_DEAD_BODY);
+        if (TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store.getFreeCapacity() > 0)) {
+            if (find_dropped_resource(creep)) { //道路修建工也额外负责房间内掉落资源的拾取，且creep身上的资源全部卸载掉之后才应去拾取
+                return;
+            }
+        }
         if (!TST_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING) && (creep.store[RESOURCE_ENERGY] == 0)) {
             SET_FLAG(creep.memory, 'role_state', roleStates.HARVESTER_HARVESTING);
         }
@@ -1224,8 +1471,10 @@ class Harvester {
         let harvester = null;
         for (const [name, obj] of Object.entries(Harvester.nameids)) {
             harvester = Harvester.getData(name);
+            const creep = harvester.self();
             if (harvester && ((type === null) || (obj.type === type))) {
-                console.log(`harvester-${i}: name:${name}, type:${obj.type}, id:${obj.id}, is_alive:${harvester.is_alive()}, `+
+                console.log(`harvester-${i}: name:${name}, type:${obj.type}, id:${obj.id}, is_alive:${harvester.is_alive()}`+
+                `(${creep.hits}/${creep.hitsMax},time:${creep.ticksToLive === undefined ? "-" : creep.ticksToLive.toString()}), `+
                 `role_state:${print_role_state(harvester.self().memory.role_state)}`);
                 i += 1;
             }
